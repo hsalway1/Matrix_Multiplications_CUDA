@@ -95,6 +95,7 @@ The reason is that register tiling decouples the **output tile size** from the *
 |--------------|------------------:|
 | Shared Tile (32×32) | 1024 |
 | Register Tile 2×2 (32×32 output tile) | 256 |
+| Register Tile 4x4 (32×32 output tile) | 64 |
 
 The larger output tile increased data reuse while maintaining a reasonable number of threads per block, resulting in substantially better performance.
 
