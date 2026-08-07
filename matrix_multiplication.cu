@@ -5,7 +5,8 @@
 #include <cmath>
 
 #define TILE_SIZE 32
-#define THREAD_TILE 2
+#define THREAD_TILE_2 2
+#define THREAD_TILE_4 4
 
 // checking for any errors
 #define CUDA_CHECK(call) \
@@ -110,7 +111,7 @@ __global__ void registerTilingMatrixMultiplication12(float *A, float *B, float *
     int ty = threadIdx.y;
 
     int localRow = ty;
-    int localCol = THREAD_TILE * tx;
+    int localCol = THREAD_TILE_2 * tx;
 
     // the elements a single thread will calculate are C[row][col0] and C[row][col1]
     int row = blockIdx.y * TILE_SIZE + localRow;
@@ -182,8 +183,8 @@ __global__ void registerTilingMatrixMultiplication22(float *A, float *B, float *
 
     // since each thread is handling THREAD_TILE number of rows and cols.
     // these are the positions inside the tile
-    int localRow = THREAD_TILE * ty;
-    int localCol = THREAD_TILE * tx;
+    int localRow = THREAD_TILE_2 * ty;
+    int localCol = THREAD_TILE_2 * tx;
 
     // these four values together will form a 2x2 tile in C as C[row0][col0], C[row0][col1], C[row1][col0], C[row1][col1]
     int row0 = blockIdx.y * TILE_SIZE + localRow; // actual row of the element calculated in C
@@ -259,6 +260,112 @@ __global__ void registerTilingMatrixMultiplication22(float *A, float *B, float *
 
     if (row1 < m && col1 < n) {
         C[row1 * n + col1] = sum11;
+    }
+}
+
+/**
+ * 4x4 register tiling
+ * A = m x k
+ * B = k x n
+ * C = m x n
+ * 
+ * Just need to change the value of THREAD_TILE_4 to some other value for different register tiling size.
+ */
+__global__ void registerTilingMatrixMultiplication44(float *A, float *B, float *C, int m, int n, int k) {
+    __shared__ float tileA[TILE_SIZE][TILE_SIZE];
+    __shared__ float tileB[TILE_SIZE][TILE_SIZE];
+
+    int tx = threadIdx.x;
+    int ty = threadIdx.y;
+
+    int localRow = THREAD_TILE_4 * ty;
+    int localCol = THREAD_TILE_4 * tx;
+
+    // these rows and cols values will together form the 4x4 tile in C
+    int row0 = blockIdx.y * TILE_SIZE + localRow;
+    int rows[THREAD_TILE_4];
+
+    #pragma unroll
+    for (int i = 0; i < THREAD_TILE_4; i++) {
+        rows[i] = row0 + i;
+    }
+
+    int col0 = blockIdx.x * TILE_SIZE + localCol;
+    int cols[THREAD_TILE_4];
+
+    #pragma unroll
+    for (int i = 0; i < THREAD_TILE_4; i++) {
+        cols[i] = col0 + i;
+    }
+
+    float sums[THREAD_TILE_4][THREAD_TILE_4];
+
+    #pragma unroll
+    for (int i = 0; i < THREAD_TILE_4; i++) {
+        #pragma unroll
+        for (int j = 0; j < THREAD_TILE_4; j++) {
+            sums[i][j] = 0.0f;
+        }
+    }
+
+    int numOfTiles = (k + TILE_SIZE - 1)/TILE_SIZE;
+
+    for (int tile = 0; tile < numOfTiles; tile++) {
+        int aCol0 = tile * TILE_SIZE + localCol;
+
+        // load values from A
+        #pragma unroll
+        for (int i = 0; i < THREAD_TILE_4; i++) {
+            #pragma unroll
+            for (int j = 0; j < THREAD_TILE_4; j++) {
+                tileA[localRow + i][localCol + j] = rows[i] < m && (aCol0 + j) < k ? A[rows[i] * k + aCol0 + j] : 0.0f;
+            }
+        }
+
+        int bRow0 = tile * TILE_SIZE + localRow;
+        // load values from B
+        #pragma unroll
+        for (int i = 0; i < THREAD_TILE_4; i++) {
+            #pragma unroll
+            for (int j = 0; j < THREAD_TILE_4; j++) {
+                tileB[localRow + i][localCol + j] = (bRow0 + i) < k && cols[j] < n ? B[(bRow0 + i) * n + cols[j]] : 0.0f;
+            }
+        }
+
+        __syncthreads();
+
+        #pragma unroll
+        for (int h = 0; h < THREAD_TILE_4; h++) {
+            #pragma unroll
+            for (int i = 0; i < THREAD_TILE_4; i++) {
+                for (int j = 0; j < TILE_SIZE; j++) {
+                    sums[h][i] += tileA[localRow + h][j] * tileB[j][localCol + i];
+                }
+            }
+        }
+
+        __syncthreads();
+    }
+
+    for (int j = 0; j < TILE_SIZE; j++) {
+        float regA[4];
+        float regB[4];
+
+        #pragma unroll
+        for (int h = 0; h < 4; h++)
+            regA[h] = tileA[localRow + h][j];
+
+        #pragma unroll
+        for (int i = 0; i < 4; i++)
+            regB[i] = tileB[j][localCol + i];
+
+        #pragma unroll
+        for (int h = 0; h < 4; h++) {
+            #pragma unroll
+            for (int i = 0; i < 4; i++) {
+                sums[h][i] += regA[h] * regB[i];
+            }
+        }
     }
 }
 
@@ -405,9 +512,9 @@ int main() {
     // B = K x N
     // C = M x N
 
-    constexpr int M = 1 << 9;
-    constexpr int K = 1 << 9;
-    constexpr int N = 1 << 9;
+    constexpr int M = 1 << 10;
+    constexpr int K = 1 << 10;
+    constexpr int N = 1 << 10;
 
     constexpr int ITERATIONS = 10;
 
@@ -427,6 +534,7 @@ int main() {
     std::vector<float> h_shared(elementsC);
     std::vector<float> h_register12(elementsC);
     std::vector<float> h_register22(elementsC);
+    std::vector<float> h_register44(elementsC);
 
     // initializing the matrices
     for (size_t i = 0; i < h_A.size(); ++i) {
@@ -477,7 +585,7 @@ int main() {
 
     CUDA_CHECK(cudaMemcpy(h_shared.data(), d_C, bytesC, cudaMemcpyDeviceToHost));
 
-    dim3 register12Block(TILE_SIZE / THREAD_TILE, TILE_SIZE);
+    dim3 register12Block(TILE_SIZE / THREAD_TILE_2, TILE_SIZE);
 
     dim3 register12Grid((N + TILE_SIZE - 1) / TILE_SIZE, (M + TILE_SIZE - 1) / TILE_SIZE);
 
@@ -491,7 +599,7 @@ int main() {
 
     CUDA_CHECK(cudaMemcpy(h_register12.data(), d_C, bytesC, cudaMemcpyDeviceToHost));
 
-    dim3 register22Block(TILE_SIZE / THREAD_TILE, TILE_SIZE / THREAD_TILE);
+    dim3 register22Block(TILE_SIZE / THREAD_TILE_2, TILE_SIZE / THREAD_TILE_2);
 
     dim3 register22Grid((N + TILE_SIZE - 1) / TILE_SIZE, (M + TILE_SIZE - 1) / TILE_SIZE);
 
@@ -505,6 +613,20 @@ int main() {
 
     CUDA_CHECK(cudaMemcpy(h_register22.data(), d_C, bytesC, cudaMemcpyDeviceToHost));
 
+    dim3 register44Block(TILE_SIZE / THREAD_TILE_4, TILE_SIZE / THREAD_TILE_4);
+
+    dim3 register44Grid((N + TILE_SIZE - 1) / TILE_SIZE, (M + TILE_SIZE - 1) / TILE_SIZE);
+
+    float register44Time = measureKernelTime(
+        "Register-tiled 4x4 Kernel",
+        ITERATIONS,
+        [&]() {
+            registerTilingMatrixMultiplication44<<<register44Grid, register44Block>>>(d_A, d_B, d_C, M, N, K);
+        }
+    );
+
+    CUDA_CHECK(cudaMemcpy(h_register44.data(), d_C, bytesC, cudaMemcpyDeviceToHost));
+
     std::cout << "\nCorrectness checks:\n";
 
     const bool naiveCorrect = checkCorrectness(h_reference, h_naive, "Naive kernel");
@@ -513,9 +635,11 @@ int main() {
 
     const bool register12Correct = checkCorrectness(h_reference, h_register12, "Register-tiled 1x2 kernel");
 
-    const bool register22Correct =checkCorrectness(h_reference, h_register22, "Register-tiled 2x2 kernel");
+    const bool register22Correct = checkCorrectness(h_reference, h_register22, "Register-tiled 2x2 kernel");
 
-    const bool allCorrect = naiveCorrect && sharedCorrect && register12Correct && register22Correct;
+    const bool register44Correct = checkCorrectness(h_reference, h_register44, "Register-tiled 4x4 kernel");
+
+    const bool allCorrect = naiveCorrect && sharedCorrect && register12Correct && register22Correct && register44Correct;
 
     std::cout << "\nSpeedups relative to naive:\n";
 
@@ -524,6 +648,8 @@ int main() {
     std::cout << "Register tiled 1x2: " << naiveTime / register12Time << "x\n";
 
     std::cout << "Register tiled 2x2: " << naiveTime / register22Time << "x\n";
+
+    std::cout << "Register tiled 4x4: " << naiveTime / register44Time << "x\n";
 
     std::cout << "\nOverall correctness: " << (allCorrect ? "PASSED" : "FAILED") << '\n';
 
