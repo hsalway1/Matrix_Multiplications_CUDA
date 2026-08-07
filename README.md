@@ -23,6 +23,9 @@ This project explores different optimization techniques for dense matrix multipl
   - Each thread computes a 2 × 2 output tile.
   - Further increases register reuse while reducing shared memory accesses.
 
+- **4 x 4 Register Tiling**
+  - Each thread computes a 4 x 4 output tile.
+
 ---
 
 # Benchmark Results
@@ -36,7 +39,8 @@ All benchmarks were performed on an NVIDIA RTX 4070.
 | Naive | 127.27 | 1.00× |
 | Shared Memory Tiled | 88.99 | 1.43× |
 | Register Tiled (1×2) | 47.47 | 2.68× |
-| Register Tiled (2×2) | 35.62 | **3.57×** |
+| Register Tiled (2×2) | 35.62 | 3.57× |
+| Register Tiled (4x4) | 18.2069 | *7x*|
 
 ---
 
@@ -47,8 +51,8 @@ All benchmarks were performed on an NVIDIA RTX 4070.
 | Naive | 2.41 | 1.00× |
 | Shared Memory Tiled | 2.18 | 1.11× |
 | Register Tiled (1×2) | 1.31 | 1.85× |
-| Register Tiled (2×2) | 0.66 | **3.67×** |
-
+| Register Tiled (2×2) | 0.66 | 3.67× |
+| Register Tiled (4×4) | 0.66 | *7.1×* |
 ---
 
 ## Correctness
@@ -70,6 +74,10 @@ Moving data from global memory into shared memory provided a modest improvement 
 Register tiling provided the largest performance improvement.
 
 Computing multiple output elements per thread allowed values loaded from shared memory to be reused several times before being discarded, significantly reducing shared memory traffic.
+
+We experimented with 1x2, 2x2, 4x4 and 8x8 register tiling and found 4x4 to be performing the best so far and the improvement is really good. For larger matrix sizes the 4x4 kernel gave up to 10x improvement relative to the naive implementation.
+
+Just like how we increased the tile size for 2x2 from 16x16 to 32x32, we could try increasing for 4x4 kernel as well. It might result in reduction in performance since more shared memory per block can lead to less block in SMs. Unfortunately, in RTX 4070, only 1024 threads are supported per block.
 
 ---
 
