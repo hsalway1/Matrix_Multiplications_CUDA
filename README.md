@@ -52,7 +52,7 @@ All benchmarks were performed on an NVIDIA RTX 4070.
 | Shared Memory Tiled | 2.18 | 1.11× |
 | Register Tiled (1×2) | 1.31 | 1.85× |
 | Register Tiled (2×2) | 0.66 | 3.67× |
-| Register Tiled (4×4) | 0.66 | *7.1×* |
+| Register Tiled (4×4) | 0.34 | *7.1×* |
 ---
 
 ## Correctness
