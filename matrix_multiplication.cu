@@ -21,22 +21,22 @@
  * Naive matrix multiplication
  * Each thread will compute one element of C
  * Repeated duplicate global reads
- * A = m x n
- * B = n x k
- * C = m x k
+ * A = m x k
+ * B = k x n
+ * C = m x n
  */
 __global__ void naiveMatrixMultiplication(float *A, float *B, float *C, int m, int n, int k) {
     int col = blockIdx.x * blockDim.x + threadIdx.x;
     int row = blockIdx.y * blockDim.y + threadIdx.y;
 
-    if (col < k && row < m) {
+    if (col < n && row < m) {
         float sum = 0.0f;
 
-        for (int i = 0; i < n; i++) {
-            sum += A[row * n + i] * B[i * k + col];
+        for (int i = 0; i < k; i++) {
+            sum += A[row * k + i] * B[i * n + col];
         }
 
-        C[row * k + col] = sum;
+        C[row * n + col] = sum;
     }
 }
 
@@ -44,9 +44,9 @@ __global__ void naiveMatrixMultiplication(float *A, float *B, float *C, int m, i
  * Standard shared tile matrix multiplication
  * Tile size is the same as the block size
  * Each Thread in the block will load one value into shared tile at each iteration and calculate one value of C
- * A = m x n
- * B = n x k
- * C = m x k
+ * A = m x k
+ * B = k x n
+ * C = m x n
  */
 __global__ void sharedTileMatrixMultiplication(float *A, float *B, float *C, int m, int n, int k) {
     __shared__ float tileA[TILE_SIZE][TILE_SIZE];
@@ -61,21 +61,21 @@ __global__ void sharedTileMatrixMultiplication(float *A, float *B, float *C, int
 
     float sum = 0.0f;
 
-    int numOfTiles = (n + TILE_SIZE - 1) / TILE_SIZE;
+    int numOfTiles = (k + TILE_SIZE - 1) / TILE_SIZE;
 
     for (int tile = 0; tile < numOfTiles; tile++) {
         int aCol = tile * TILE_SIZE + tx;
         int bRow = tile * TILE_SIZE + ty;
 
         // each thread loads one A value into shared memory
-        if (row < m && aCol < n) {
-            tileA[ty][tx] = A[row * n + aCol];
+        if (row < m && aCol < k) {
+            tileA[ty][tx] = A[row * k + aCol];
         } else {
             tileA[ty][tx] = 0.0f;
         }
 
-        if (bRow < n && col < k) {
-            tileB[ty][tx] = B[bRow * k + col];
+        if (bRow < k && col < n) {
+            tileB[ty][tx] = B[bRow * n + col];
         } else {
             tileB[ty][tx] = 0.0f;
         }
@@ -90,8 +90,8 @@ __global__ void sharedTileMatrixMultiplication(float *A, float *B, float *C, int
         __syncthreads();
     }
 
-    if (row < m && col < k) {
-        C[row * k + col] = sum;
+    if (row < m && col < n) {
+        C[row * n + col] = sum;
     }
 }
 
@@ -262,6 +262,9 @@ __global__ void registerTilingMatrixMultiplication22(float *A, float *B, float *
     }
 }
 
+/**
+ * Calculates the average kernel time over `iterations` number of iterations
+ */
 template <typename LaunchKernel>
 float measureKernelTime(
     const char* kernelName,
@@ -290,29 +293,22 @@ float measureKernelTime(
     CUDA_CHECK(cudaGetLastError());
 
     float totalMilliseconds = 0.0f;
-    CUDA_CHECK(cudaEventElapsedTime(
-        &totalMilliseconds,
-        start,
-        stop
-    ));
+    CUDA_CHECK(cudaEventElapsedTime(&totalMilliseconds, start, stop));
 
     CUDA_CHECK(cudaEventDestroy(start));
     CUDA_CHECK(cudaEventDestroy(stop));
 
-    float averageMilliseconds =
-        totalMilliseconds / static_cast<float>(iterations);
+    float averageMilliseconds = totalMilliseconds / static_cast<float>(iterations);
 
-    std::cout
-        << kernelName
-        << ": "
-        << averageMilliseconds
-        << " ms average over "
-        << iterations
-        << " iterations\n";
+    std::cout<< kernelName<< ": "<< averageMilliseconds<< " ms average over "<< iterations<< " iterations\n";
 
     return averageMilliseconds;
 }
 
+/**
+ * Naive CPU matrix multiplication
+ * This will be used as a reference to check correctness of kernel outputs
+ */
 void matrixMultiplyCPU(
     const std::vector<float>& A,
     const std::vector<float>& B,
@@ -335,6 +331,11 @@ void matrixMultiplyCPU(
     }
 }
 
+/**
+ * Validate `actual` against `expected` element-wise.
+ * Passes if absolute error <= `absoluteTolerance` or relative error <= `relativeTolerance`.
+ * Prints the first failing element (with details) or a summary on success.
+ */
 bool checkCorrectness(
     const std::vector<float>& expected,
     const std::vector<float>& actual,
@@ -354,10 +355,7 @@ bool checkCorrectness(
     for (size_t i = 0; i < expected.size(); ++i) {
         float absoluteError = std::fabs(expected[i] - actual[i]);
 
-        float denominator = std::max(
-            std::fabs(expected[i]),
-            1e-6f
-        );
+        float denominator = std::max(std::fabs(expected[i]), 1e-6f);
 
         float relativeError = absoluteError / denominator;
 
@@ -367,9 +365,7 @@ bool checkCorrectness(
             maximumErrorIndex = i;
         }
 
-        bool valueMatches =
-            absoluteError <= absoluteTolerance ||
-            relativeError <= relativeTolerance;
+        bool valueMatches = absoluteError <= absoluteTolerance || relativeError <= relativeTolerance;
 
         if (!valueMatches) {
             std::cerr
@@ -432,26 +428,18 @@ int main() {
     std::vector<float> h_register12(elementsC);
     std::vector<float> h_register22(elementsC);
 
+    // initializing the matrices
     for (size_t i = 0; i < h_A.size(); ++i) {
-        h_A[i] =
-            static_cast<float>((i % 100) + 1) / 100.0f;
+        h_A[i] = static_cast<float>((i % 100) + 1) / 100.0f;
     }
 
     for (size_t i = 0; i < h_B.size(); ++i) {
-        h_B[i] =
-            static_cast<float>((i % 50) + 1) / 50.0f;
+        h_B[i] = static_cast<float>((i % 50) + 1) / 50.0f;
     }
 
     std::cout << "Calculating CPU reference...\n";
 
-    matrixMultiplyCPU(
-        h_A,
-        h_B,
-        h_reference,
-        M,
-        K,
-        N
-    );
+    matrixMultiplyCPU(h_A, h_B, h_reference, M, K, N);
 
     float* d_A = nullptr;
     float* d_B = nullptr;
@@ -461,207 +449,83 @@ int main() {
     CUDA_CHECK(cudaMalloc(&d_B, bytesB));
     CUDA_CHECK(cudaMalloc(&d_C, bytesC));
 
-    CUDA_CHECK(cudaMemcpy(
-        d_A,
-        h_A.data(),
-        bytesA,
-        cudaMemcpyHostToDevice
-    ));
+    CUDA_CHECK(cudaMemcpy(d_A, h_A.data(), bytesA, cudaMemcpyHostToDevice));
 
-    CUDA_CHECK(cudaMemcpy(
-        d_B,
-        h_B.data(),
-        bytesB,
-        cudaMemcpyHostToDevice
-    ));
+    CUDA_CHECK(cudaMemcpy(d_B, h_B.data(), bytesB, cudaMemcpyHostToDevice));
 
-    dim3 standardBlock(
-        TILE_SIZE,
-        TILE_SIZE
-    );
+    dim3 standardBlock(TILE_SIZE, TILE_SIZE);
 
-    dim3 standardGrid(
-        (N + TILE_SIZE - 1) / TILE_SIZE,
-        (M + TILE_SIZE - 1) / TILE_SIZE
-    );
+    dim3 standardGrid((N + TILE_SIZE - 1) / TILE_SIZE, (M + TILE_SIZE - 1) / TILE_SIZE);
 
     float naiveTime = measureKernelTime(
         "Naive kernel",
         ITERATIONS,
         [&]() {
-            naiveMatrixMultiplication<<<
-                standardGrid,
-                standardBlock
-            >>>(
-                d_A,
-                d_B,
-                d_C,
-                M,
-                K,
-                N
-            );
+            naiveMatrixMultiplication<<<standardGrid, standardBlock>>>(d_A, d_B, d_C, M, N, K);
         }
     );
 
-    CUDA_CHECK(cudaMemcpy(
-        h_naive.data(),
-        d_C,
-        bytesC,
-        cudaMemcpyDeviceToHost
-    ));
+    CUDA_CHECK(cudaMemcpy(h_naive.data(), d_C, bytesC, cudaMemcpyDeviceToHost));
 
     float sharedTime = measureKernelTime(
         "Shared-memory tiled kernel",
         ITERATIONS,
         [&]() {
-            sharedTileMatrixMultiplication<<<
-                standardGrid,
-                standardBlock
-            >>>(
-                d_A,
-                d_B,
-                d_C,
-                M,
-                K,
-                N
-            );
+            sharedTileMatrixMultiplication<<<standardGrid, standardBlock>>>(d_A, d_B, d_C, M, N, K);
         }
     );
 
-    CUDA_CHECK(cudaMemcpy(
-        h_shared.data(),
-        d_C,
-        bytesC,
-        cudaMemcpyDeviceToHost
-    ));
+    CUDA_CHECK(cudaMemcpy(h_shared.data(), d_C, bytesC, cudaMemcpyDeviceToHost));
 
-    dim3 register12Block(
-        TILE_SIZE / THREAD_TILE,
-        TILE_SIZE
-    );
+    dim3 register12Block(TILE_SIZE / THREAD_TILE, TILE_SIZE);
 
-    dim3 register12Grid(
-        (N + TILE_SIZE - 1) / TILE_SIZE,
-        (M + TILE_SIZE - 1) / TILE_SIZE
-    );
+    dim3 register12Grid((N + TILE_SIZE - 1) / TILE_SIZE, (M + TILE_SIZE - 1) / TILE_SIZE);
 
     float register12Time = measureKernelTime(
         "Register-tiled 1x2 kernel",
         ITERATIONS,
         [&]() {
-            registerTilingMatrixMultiplication12<<<
-                register12Grid,
-                register12Block
-            >>>(
-                d_A,
-                d_B,
-                d_C,
-                M,
-                N,
-                K
-            );
+            registerTilingMatrixMultiplication12<<<register12Grid, register12Block>>>(d_A, d_B, d_C, M, N, K);
         }
     );
 
-    CUDA_CHECK(cudaMemcpy(
-        h_register12.data(),
-        d_C,
-        bytesC,
-        cudaMemcpyDeviceToHost
-    ));
+    CUDA_CHECK(cudaMemcpy(h_register12.data(), d_C, bytesC, cudaMemcpyDeviceToHost));
 
-    dim3 register22Block(
-        TILE_SIZE / THREAD_TILE,
-        TILE_SIZE / THREAD_TILE
-    );
+    dim3 register22Block(TILE_SIZE / THREAD_TILE, TILE_SIZE / THREAD_TILE);
 
-    dim3 register22Grid(
-        (N + TILE_SIZE - 1) / TILE_SIZE,
-        (M + TILE_SIZE - 1) / TILE_SIZE
-    );
+    dim3 register22Grid((N + TILE_SIZE - 1) / TILE_SIZE, (M + TILE_SIZE - 1) / TILE_SIZE);
 
     float register22Time = measureKernelTime(
         "Register-tiled 2x2 kernel",
         ITERATIONS,
         [&]() {
-            registerTilingMatrixMultiplication22<<<
-                register22Grid,
-                register22Block
-            >>>(
-                d_A,
-                d_B,
-                d_C,
-                M,
-                N,
-                K
-            );
+            registerTilingMatrixMultiplication22<<<register22Grid, register22Block>>>(d_A, d_B, d_C, M, N, K);
         }
     );
 
-    CUDA_CHECK(cudaMemcpy(
-        h_register22.data(),
-        d_C,
-        bytesC,
-        cudaMemcpyDeviceToHost
-    ));
+    CUDA_CHECK(cudaMemcpy(h_register22.data(), d_C, bytesC, cudaMemcpyDeviceToHost));
 
     std::cout << "\nCorrectness checks:\n";
 
-    const bool naiveCorrect =
-        checkCorrectness(
-            h_reference,
-            h_naive,
-            "Naive kernel"
-        );
+    const bool naiveCorrect = checkCorrectness(h_reference, h_naive, "Naive kernel");
 
-    const bool sharedCorrect =
-        checkCorrectness(
-            h_reference,
-            h_shared,
-            "Shared-memory tiled kernel"
-        );
+    const bool sharedCorrect = checkCorrectness(h_reference, h_shared, "Shared-memory tiled kernel");
 
-    const bool register12Correct =
-        checkCorrectness(
-            h_reference,
-            h_register12,
-            "Register-tiled 1x2 kernel"
-        );
+    const bool register12Correct = checkCorrectness(h_reference, h_register12, "Register-tiled 1x2 kernel");
 
-    const bool register22Correct =
-        checkCorrectness(
-            h_reference,
-            h_register22,
-            "Register-tiled 2x2 kernel"
-        );
+    const bool register22Correct =checkCorrectness(h_reference, h_register22, "Register-tiled 2x2 kernel");
 
-    const bool allCorrect =
-        naiveCorrect &&
-        sharedCorrect &&
-        register12Correct &&
-        register22Correct;
+    const bool allCorrect = naiveCorrect && sharedCorrect && register12Correct && register22Correct;
 
     std::cout << "\nSpeedups relative to naive:\n";
 
-    std::cout
-        << "Shared tiled: "
-        << naiveTime / sharedTime
-        << "x\n";
+    std::cout << "Shared tiled: " << naiveTime / sharedTime << "x\n";
 
-    std::cout
-        << "Register tiled 1x2: "
-        << naiveTime / register12Time
-        << "x\n";
+    std::cout << "Register tiled 1x2: " << naiveTime / register12Time << "x\n";
 
-    std::cout
-        << "Register tiled 2x2: "
-        << naiveTime / register22Time
-        << "x\n";
+    std::cout << "Register tiled 2x2: " << naiveTime / register22Time << "x\n";
 
-    std::cout
-        << "\nOverall correctness: "
-        << (allCorrect ? "PASSED" : "FAILED")
-        << '\n';
+    std::cout << "\nOverall correctness: " << (allCorrect ? "PASSED" : "FAILED") << '\n';
 
     CUDA_CHECK(cudaFree(d_A));
     CUDA_CHECK(cudaFree(d_B));
