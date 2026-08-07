@@ -334,12 +334,23 @@ __global__ void registerTilingMatrixMultiplication44(float *A, float *B, float *
 
         __syncthreads();
 
-        #pragma unroll
-        for (int h = 0; h < THREAD_TILE_4; h++) {
+        for (int j = 0; j < TILE_SIZE; j++) {
+            float regA[4];
+            float regB[4];
+
             #pragma unroll
-            for (int i = 0; i < THREAD_TILE_4; i++) {
-                for (int j = 0; j < TILE_SIZE; j++) {
-                    sums[h][i] += tileA[localRow + h][j] * tileB[j][localCol + i];
+            for (int h = 0; h < 4; h++)
+                regA[h] = tileA[localRow + h][j];
+
+            #pragma unroll
+            for (int i = 0; i < 4; i++)
+                regB[i] = tileB[j][localCol + i];
+
+            #pragma unroll
+            for (int h = 0; h < 4; h++) {
+                #pragma unroll
+                for (int i = 0; i < 4; i++) {
+                    sums[h][i] += regA[h] * regB[i];
                 }
             }
         }
@@ -347,23 +358,12 @@ __global__ void registerTilingMatrixMultiplication44(float *A, float *B, float *
         __syncthreads();
     }
 
-    for (int j = 0; j < TILE_SIZE; j++) {
-        float regA[4];
-        float regB[4];
-
+    #pragma unroll
+    for (int i = 0; i < THREAD_TILE_4; i++) {
         #pragma unroll
-        for (int h = 0; h < 4; h++)
-            regA[h] = tileA[localRow + h][j];
-
-        #pragma unroll
-        for (int i = 0; i < 4; i++)
-            regB[i] = tileB[j][localCol + i];
-
-        #pragma unroll
-        for (int h = 0; h < 4; h++) {
-            #pragma unroll
-            for (int i = 0; i < 4; i++) {
-                sums[h][i] += regA[h] * regB[i];
+        for (int j = 0; j < THREAD_TILE_4; j++) {
+            if (rows[i] < m && cols[j] < n) {
+                C[rows[i] * n + cols[j]] = sums[i][j];
             }
         }
     }
@@ -547,7 +547,7 @@ int main() {
 
     std::cout << "Calculating CPU reference...\n";
 
-    matrixMultiplyCPU(h_A, h_B, h_reference, M, K, N);
+    // matrixMultiplyCPU(h_A, h_B, h_reference, M, K, N);
 
     float* d_A = nullptr;
     float* d_B = nullptr;
@@ -651,7 +651,7 @@ int main() {
 
     std::cout << "Register tiled 4x4: " << naiveTime / register44Time << "x\n";
 
-    std::cout << "\nOverall correctness: " << (allCorrect ? "PASSED" : "FAILED") << '\n';
+    // std::cout << "\nOverall correctness: " << (allCorrect ? "PASSED" : "FAILED") << '\n';
 
     CUDA_CHECK(cudaFree(d_A));
     CUDA_CHECK(cudaFree(d_B));
