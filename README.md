@@ -120,7 +120,7 @@ Simply increasing tile sizes or register usage does not always improve performan
 # Future Work
 
 Planned optimizations include:
-
+- Try larger register tiling ✅
 - Vectorized memory loads (`float2` / `float4`)
 - Double buffering
 - Software pipelining
